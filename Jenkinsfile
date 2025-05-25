@@ -30,14 +30,20 @@ pipeline {
                 }
             }
         }
+
         stage('Build and Test Microservices') {
+            steps {
+                sh './mvnw clean package'
+            }
+        }
+
+        stage('Push Images to Docker Hub') {
             parallel {
                 stage('Order Service') {
                     steps {
                         dir('order-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/order-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/order-service:${TAG}"
                                 } catch (Exception e) {
@@ -54,7 +60,6 @@ pipeline {
                         dir('product-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/product-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/product-service:${TAG}"
                                 } catch (Exception e) {
@@ -71,7 +76,6 @@ pipeline {
                         dir('user-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/user-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/user-service:${TAG}"
                                 } catch (Exception e) {
@@ -88,7 +92,6 @@ pipeline {
                         dir('api-gateway') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/api-gateway:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/api-gateway:${TAG}"
                                 } catch (Exception e) {
@@ -105,7 +108,6 @@ pipeline {
                         dir('proxy-client') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/proxy-client:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/proxy-client:${TAG}"
                                 } catch (Exception e) {
@@ -122,7 +124,6 @@ pipeline {
                         dir('shipping-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/shipping-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/shipping-service:${TAG}"
                                 } catch (Exception e) {
@@ -139,7 +140,6 @@ pipeline {
                         dir('favourite-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/favourite-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/favourite-service:${TAG}"
                                 } catch (Exception e) {
@@ -156,7 +156,6 @@ pipeline {
                         dir('payment-service') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/payment-service:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/payment-service:${TAG}"
                                 } catch (Exception e) {
@@ -173,7 +172,6 @@ pipeline {
                         dir('cloud-config') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/cloud-config:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/cloud-config:${TAG}"
                                 } catch (Exception e) {
@@ -190,7 +188,6 @@ pipeline {
                         dir('service-discovery') {
                             script {
                                 try {
-                                    sh './mvnw clean package'
                                     sh "docker build -t ${DOCKERHUB_USER}/service-discovery:${TAG} ."
                                     sh "docker push ${DOCKERHUB_USER}/service-discovery:${TAG}"
                                 } catch (Exception e) {
@@ -219,7 +216,6 @@ pipeline {
                             kubectl config use-context kubernetes
                         else
                             echo "Using external kubeconfig"
-                            # Aquí puedes configurar tu kubeconfig externo si es necesario
                         fi
                     '''
                 }
