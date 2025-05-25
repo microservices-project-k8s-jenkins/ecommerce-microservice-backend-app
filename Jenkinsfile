@@ -17,9 +17,7 @@ pipeline {
                 stage('Order Service') {
                     steps {
                         dir('order-service') {
-                            sh './mvnw test -Dtest=com.ecommerce.orderservice.unit.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.orderservice.integration.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.orderservice.e2e.*Test'
+                            sh './mvnw test'
                             sh "docker build -t ${DOCKERHUB_USER}/order-service:${TAG} ."
                             sh "docker push ${DOCKERHUB_USER}/order-service:${TAG}"
                         }
@@ -28,9 +26,7 @@ pipeline {
                 stage('Product Service') {
                     steps {
                         dir('product-service') {
-                            sh './mvnw test -Dtest=com.ecommerce.productservice.unit.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.productservice.integration.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.productservice.e2e.*Test'
+                            sh './mvnw test'
                             sh "docker build -t ${DOCKERHUB_USER}/product-service:${TAG} ."
                             sh "docker push ${DOCKERHUB_USER}/product-service:${TAG}"
                         }
@@ -39,9 +35,7 @@ pipeline {
                 stage('User Service') {
                     steps {
                         dir('user-service') {
-                            sh './mvnw test -Dtest=com.ecommerce.userservice.unit.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.userservice.integration.*Test'
-                            sh './mvnw test -Dtest=com.ecommerce.userservice.e2e.*Test'
+                            sh './mvnw test'
                             sh "docker build -t ${DOCKERHUB_USER}/user-service:${TAG} ."
                             sh "docker push ${DOCKERHUB_USER}/user-service:${TAG}"
                         }
