@@ -41,161 +41,71 @@ pipeline {
             parallel {
                 stage('Order Service') {
                     steps {
-                        dir('order-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/order-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/order-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Order Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'order-service'
                         }
                     }
                 }
                 stage('Product Service') {
                     steps {
-                        dir('product-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/product-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/product-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Product Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'product-service'
                         }
                     }
                 }
                 stage('User Service') {
                     steps {
-                        dir('user-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/user-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/user-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in User Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'user-service'
                         }
                     }
                 }
                 stage('Api Gateway') {
                     steps {
-                        dir('api-gateway') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/api-gateway:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/api-gateway:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Api Gateway: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'api-gateway'
                         }
                     }
                 }
                 stage('Proxy Client') {
                     steps {
-                        dir('proxy-client') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/proxy-client:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/proxy-client:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Proxy Client: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'proxy-client'
                         }
                     }
                 }
                 stage('Shipping Service') {
                     steps {
-                        dir('shipping-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/shipping-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/shipping-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Shipping Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'shipping-service'
                         }
                     }
                 }
                 stage('Favourite Service') {
                     steps {
-                        dir('favourite-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/favourite-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/favourite-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Favourite Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'favourite-service'
                         }
                     }
                 }
                 stage('Payment Service') {
                     steps {
-                        dir('payment-service') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/payment-service:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/payment-service:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Payment Service: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'payment-service'
                         }
                     }
                 }
                 stage('Cloud Config') {
                     steps {
-                        dir('cloud-config') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/cloud-config:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/cloud-config:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Cloud Config: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'cloud-config'
                         }
                     }
                 }
                 stage('Service Discovery') {
                     steps {
-                        dir('service-discovery') {
-                            script {
-                                try {
-                                    sh "docker build -t ${DOCKERHUB_USER}/service-discovery:${TAG} ."
-                                    sh "docker push ${DOCKERHUB_USER}/service-discovery:${TAG}"
-                                } catch (Exception e) {
-                                    echo "Error in Service Discovery: ${e.getMessage()}"
-                                    currentBuild.result = 'FAILURE'
-                                    throw e
-                                }
-                            }
+                        script {
+                            buildAndPushDockerImage 'service-discovery'
                         }
                     }
                 }
@@ -245,19 +155,19 @@ pipeline {
                     sh "kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -"
                     
                     sh """
-                        helm upgrade --install ecommerce-app ecommerce-chart/ecommerce-app \
-                        --namespace ${namespace} \
-                        --set cloud-config.image.tag=${TAG} \
-                        --set service-discovery.image.tag=${TAG} \
-                        --set api-gateway.image.tag=${TAG} \
-                        --set proxy-client.image.tag=${TAG} \
-                        --set order-service.image.tag=${TAG} \
-                        --set payment-service.image.tag=${TAG} \
-                        --set product-service.image.tag=${TAG} \
-                        --set shipping-service.image.tag=${TAG} \
-                        --set user-service.image.tag=${TAG} \
-                        --set favourite-service.image.tag=${TAG} \
-                        -f ecommerce-chart/ecommerce-app/${valuesFile} \
+                        helm upgrade --install ecommerce-app ecommerce-chart/ecommerce-app \\
+                        --namespace ${namespace} \\
+                        --set cloud-config.image.tag=${TAG} \\
+                        --set service-discovery.image.tag=${TAG} \\
+                        --set api-gateway.image.tag=${TAG} \\
+                        --set proxy-client.image.tag=${TAG} \\
+                        --set order-service.image.tag=${TAG} \\
+                        --set payment-service.image.tag=${TAG} \\
+                        --set product-service.image.tag=${TAG} \\
+                        --set shipping-service.image.tag=${TAG} \\
+                        --set user-service.image.tag=${TAG} \\
+                        --set favourite-service.image.tag=${TAG} \\
+                        -f ecommerce-chart/ecommerce-app/${valuesFile} \\
                         --wait --timeout=10m
                     """
                     env.DEPLOY_NAMESPACE = namespace
@@ -328,6 +238,26 @@ pipeline {
         }
         failure {
             echo "Pipeline failed. Check the logs for details."
+        }
+    }
+}
+
+void buildAndPushDockerImage(String serviceName) {
+    dir(serviceName) {
+        script {
+            try {
+                sh "docker build -t ${DOCKERHUB_USER}/${serviceName}:${TAG} ."
+                sh "docker push ${DOCKERHUB_USER}/${serviceName}:${TAG}"
+
+                sh "docker tag ${DOCKERHUB_USER}/${serviceName}:${TAG} ${DOCKERHUB_USER}/${serviceName}:latest"
+                sh "docker push ${DOCKERHUB_USER}/${serviceName}:latest"
+
+                echo "Successfully built and pushed ${serviceName}:${TAG} and ${serviceName}:latest"
+            } catch (Exception e) {
+                echo "Error in ${serviceName}: ${e.getMessage()}"
+                currentBuild.result = 'FAILURE'
+                throw e
+            }
         }
     }
 }
