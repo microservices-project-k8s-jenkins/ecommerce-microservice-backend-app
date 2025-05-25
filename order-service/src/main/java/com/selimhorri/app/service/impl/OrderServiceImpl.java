@@ -60,8 +60,12 @@ public class OrderServiceImpl implements OrderService {
 	@Override
 	public OrderDto update(final Integer orderId, final OrderDto orderDto) {
 		log.info("*** OrderDto, service; update order with orderId *");
-		return OrderMappingHelper.map(this.orderRepository
-				.save(OrderMappingHelper.map(this.findById(orderId))));
+		OrderDto existing = this.findById(orderId);
+		existing.setOrderDate(orderDto.getOrderDate());
+		existing.setOrderDesc(orderDto.getOrderDesc());
+		existing.setOrderFee(orderDto.getOrderFee());
+		existing.setCartDto(orderDto.getCartDto());
+		return OrderMappingHelper.map(this.orderRepository.save(OrderMappingHelper.map(existing)));
 	}
 	
 	@Override

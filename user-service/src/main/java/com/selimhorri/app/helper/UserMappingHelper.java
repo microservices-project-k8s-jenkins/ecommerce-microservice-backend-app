@@ -16,16 +16,17 @@ public interface UserMappingHelper {
 				.email(user.getEmail())
 				.phone(user.getPhone())
 				.credentialDto(
-						CredentialDto.builder()
-							.credentialId(user.getCredential().getCredentialId())
-							.username(user.getCredential().getUsername())
-							.password(user.getCredential().getPassword())
-							.roleBasedAuthority(user.getCredential().getRoleBasedAuthority())
-							.isEnabled(user.getCredential().getIsEnabled())
-							.isAccountNonExpired(user.getCredential().getIsAccountNonExpired())
-							.isAccountNonLocked(user.getCredential().getIsAccountNonLocked())
-							.isCredentialsNonExpired(user.getCredential().getIsCredentialsNonExpired())
-							.build())
+						user.getCredential() == null ? null :
+							CredentialDto.builder()
+								.credentialId(user.getCredential().getCredentialId())
+								.username(user.getCredential().getUsername())
+								.password(user.getCredential().getPassword())
+								.roleBasedAuthority(user.getCredential().getRoleBasedAuthority())
+								.isEnabled(user.getCredential().getIsEnabled())
+								.isAccountNonExpired(user.getCredential().getIsAccountNonExpired())
+								.isAccountNonLocked(user.getCredential().getIsAccountNonLocked())
+								.isCredentialsNonExpired(user.getCredential().getIsCredentialsNonExpired())
+								.build())
 				.build();
 	}
 	
@@ -38,16 +39,18 @@ public interface UserMappingHelper {
 				.email(userDto.getEmail())
 				.phone(userDto.getPhone())
 				.credential(
-						Credential.builder()
-							.credentialId(userDto.getCredentialDto().getCredentialId())
-							.username(userDto.getCredentialDto().getUsername())
-							.password(userDto.getCredentialDto().getPassword())
-							.roleBasedAuthority(userDto.getCredentialDto().getRoleBasedAuthority())
-							.isEnabled(userDto.getCredentialDto().getIsEnabled())
-							.isAccountNonExpired(userDto.getCredentialDto().getIsAccountNonExpired())
-							.isAccountNonLocked(userDto.getCredentialDto().getIsAccountNonLocked())
-							.isCredentialsNonExpired(userDto.getCredentialDto().getIsCredentialsNonExpired())
-							.build())
+						userDto.getCredentialDto() == null ? null :
+							Credential.builder()
+								.credentialId(userDto.getCredentialDto().getCredentialId())
+								.username(userDto.getCredentialDto().getUsername())
+								.password(userDto.getCredentialDto().getPassword())
+								.roleBasedAuthority(userDto.getCredentialDto().getRoleBasedAuthority())
+								.isEnabled(userDto.getCredentialDto().getIsEnabled())
+								.isAccountNonExpired(userDto.getCredentialDto().getIsAccountNonExpired())
+								.isAccountNonLocked(userDto.getCredentialDto().getIsAccountNonLocked())
+								.isCredentialsNonExpired(userDto.getCredentialDto().getIsCredentialsNonExpired())
+								.build()
+				)
 				.build();
 	}
 	
