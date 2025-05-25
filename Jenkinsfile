@@ -235,7 +235,7 @@ pipeline {
                     } else if (env.BRANCH_NAME == 'stage') {
                         namespace = 'stage'
                         valuesFile = 'values-stage.yaml'
-                    } else if (env.BRANCH_NAME == 'prod') {
+                    } else if (env.BRANCH_NAME == 'master') {
                         namespace = 'master'
                         valuesFile = 'values-master.yaml'
                     } else {
