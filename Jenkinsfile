@@ -7,7 +7,6 @@ pipeline {
         TAG = "${env.BUILD_NUMBER}"
         IS_PR = "${env.CHANGE_ID != null ? 'true' : 'false'}"
         IS_DEV_PR = "${env.CHANGE_ID != null && env.CHANGE_TARGET == 'dev' ? 'true' : 'false'}"
-        DOCKERHUB_USER = credentials('dockerhub-user')
     }
     stages {
         stage('Checkout') {
@@ -23,8 +22,9 @@ pipeline {
         }
         stage('Docker Login') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub', passwordVariable: 'DOCKERHUB_PASS', usernameVariable: 'DOCKERHUB_USER_TEMP')]) {
-                    sh 'echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER_TEMP --password-stdin'
+                withCredentials([usernamePassword(credentialsId: 'dockerhub', passwordVariable: 'DOCKERHUB_PASS', usernameVariable: 'DOCKERHUB_USER')]) {
+                    sh 'echo $DOCKERHUB_PASS | docker login -u $DOCKERHUB_USER --password-stdin'
+                    env.DOCKERHUB_USER = "${DOCKERHUB_USER}"
                 }
             }
         }
