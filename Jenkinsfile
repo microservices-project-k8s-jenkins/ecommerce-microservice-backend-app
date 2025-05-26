@@ -118,14 +118,15 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        if [ -f /var/jenkins_home/.kube/config ]; then
-                            echo "Using kubeconfig from mounted volume"
-                            export KUBECONFIG=/var/jenkins_home/.kube/config
-                            kubectl cluster-info
-                        else
-                            echo "ERROR: No kubeconfig found"
-                            exit 1
-                        fi
+                        echo "Configuring kubectl for Docker container access"
+                        export KUBECONFIG=/var/jenkins_home/.kube/config
+                        
+                        CURRENT_SERVER=$(kubectl config view --raw -o jsonpath='{.clusters[0].cluster.server}')
+                        PORT=$(echo $CURRENT_SERVER | sed 's/.*://')
+                        
+                        kubectl config set-cluster minikube --server=https://host.docker.internal:$PORT --insecure-skip-tls-verify=true
+                        
+                        kubectl cluster-info
                     '''
                 }
             }
