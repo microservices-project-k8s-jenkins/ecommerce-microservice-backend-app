@@ -40,21 +40,18 @@ pipeline {
                     sh '''
                         echo "Configuring kubectl for minikube from Docker container"
                         
-                        # Copiar config a ubicación escribible PRIMERO
                         cp /var/jenkins_home/.kube/config /tmp/kubeconfig
                         export KUBECONFIG=/tmp/kubeconfig
                         
-                        # Ahora ya podemos modificar el config
-                        # Obtener servidor actual de minikube
                         MINIKUBE_SERVER=$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="minikube")].cluster.server}')
                         echo "Original minikube server: $MINIKUBE_SERVER"
                         PORT=$(echo $MINIKUBE_SERVER | sed 's/.*://')
                         echo "Port: $PORT"
                         
-                        # Configurar servidor para acceso desde contenedor Docker
-                        kubectl config set-cluster minikube --server=https://host.docker.internal:$PORT --insecure-skip-tls-verify=true
+                        MINIKUBE_IP="192.168.49.2"
                         
-                        # Verificar conexión
+                        kubectl config set-cluster minikube --server=https://$MINIKUBE_IP:$PORT --insecure-skip-tls-verify=true
+                        
                         kubectl cluster-info
                     '''
                 }
