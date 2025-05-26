@@ -167,7 +167,7 @@ pipeline {
                         --set shipping-service.image.tag=${TAG} \\
                         --set user-service.image.tag=${TAG} \\
                         --set favourite-service.image.tag=${TAG} \\
-                        -f ecommerce-chart/ecommerce-app/${valuesFile} \\
+                        -f ecommerce-chart/${valuesFile} \\
                         --wait --timeout=10m
                     """
                     env.DEPLOY_NAMESPACE = namespace
