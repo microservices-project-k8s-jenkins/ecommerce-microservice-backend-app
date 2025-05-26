@@ -118,10 +118,18 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "Configuring kubectl for Docker container access"
+                        echo "Checking available contexts"
                         export KUBECONFIG=/var/jenkins_home/.kube/config
                         
+                        kubectl config get-contexts
+                        kubectl config current-context
+                        kubectl config use-context minikube
+                        
+                        cp /var/jenkins_home/.kube/config /tmp/kubeconfig
+                        export KUBECONFIG=/tmp/kubeconfig
+                        
                         CURRENT_SERVER=$(kubectl config view --raw -o jsonpath='{.clusters[0].cluster.server}')
+                        echo "Minikube server: $CURRENT_SERVER"
                         PORT=$(echo $CURRENT_SERVER | sed 's/.*://')
                         
                         kubectl config set-cluster minikube --server=https://host.docker.internal:$PORT --insecure-skip-tls-verify=true
