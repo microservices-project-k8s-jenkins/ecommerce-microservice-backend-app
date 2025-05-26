@@ -155,7 +155,7 @@ pipeline {
                     sh "kubectl create namespace ${namespace} --dry-run=client -o yaml | kubectl apply -f -"
                     
                     sh """
-                        helm upgrade --install ecommerce-app ecommerce-chart/ecommerce-app \\
+                        helm upgrade --install ecommerce-app ecommerce-chart \\
                         --namespace ${namespace} \\
                         --set cloud-config.image.tag=${TAG} \\
                         --set service-discovery.image.tag=${TAG} \\
