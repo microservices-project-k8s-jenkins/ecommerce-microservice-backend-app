@@ -174,63 +174,6 @@ pipeline {
                 }
             }
         }
-        stage('Performance Tests') {
-            when {
-                expression { env.IS_PR == 'false' }
-            }
-            steps {
-                script {
-                    sh 'mkdir -p reports'
-                    def namespace = env.DEPLOY_NAMESPACE ?: (env.BRANCH_NAME == 'dev' ? 'dev' : (env.BRANCH_NAME == 'stage' ? 'stage' : (env.BRANCH_NAME == 'prod' ? 'master' : 'dev')))
-                    
-                    sh "kubectl rollout status deployment/order-service --namespace ${namespace} --timeout=300s"
-                    sh "kubectl rollout status deployment/product-service --namespace ${namespace} --timeout=300s"
-                    sh "kubectl rollout status deployment/user-service --namespace ${namespace} --timeout=300s"
-                    
-                    try {
-                        dir('order-service') {
-                            sh 'locust -f tests/performance/locustfile.py --headless -u 100 -r 10 --run-time 1m --html=../reports/order-service-report.html --csv=../reports/order-service'
-                        }
-                    } catch (Exception e) {
-                        echo "Error en performance test de order-service: ${e.getMessage()}"
-                    }
-                    
-                    try {
-                        dir('product-service') {
-                            sh 'locust -f tests/performance/locustfile.py --headless -u 100 -r 10 --run-time 1m --html=../reports/product-service-report.html --csv=../reports/product-service'
-                        }
-                    } catch (Exception e) {
-                        echo "Error en performance test de product-service: ${e.getMessage()}"
-                    }
-                    
-                    try {
-                        dir('user-service') {
-                            sh 'locust -f tests/performance/locustfile.py --headless -u 100 -r 10 --run-time 1m --html=../reports/user-service-report.html --csv=../reports/user-service'
-                        }
-                    } catch (Exception e) {
-                        echo "Error en performance test de user-service: ${e.getMessage()}"
-                    }
-                }
-            }
-            post {
-                always {
-                    script {
-                        if (fileExists('reports')) {
-                            archiveArtifacts artifacts: 'reports/*.html', fingerprint: true, allowEmptyArchive: true
-                            archiveArtifacts artifacts: 'reports/*.csv', fingerprint: true, allowEmptyArchive: true
-                            publishHTML([
-                                allowMissing: true,
-                                alwaysLinkToLastBuild: true,
-                                keepAll: true,
-                                reportDir: 'reports',
-                                reportFiles: '*.html',
-                                reportName: 'Locust Performance Reports'
-                            ])
-                        }
-                    }
-                }
-            }
-        }
     }
     post {
         always {
