@@ -44,13 +44,8 @@ pipeline {
                         export KUBECONFIG=/tmp/kubeconfig
                         
                         MINIKUBE_SERVER=$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="minikube")].cluster.server}')
-                        echo "Original minikube server: $MINIKUBE_SERVER"
                         PORT=$(echo $MINIKUBE_SERVER | sed 's/.*://')
-                        echo "Port: $PORT"
-                        
-                        MINIKUBE_IP="192.168.49.2"
-                        
-                        kubectl config set-cluster minikube --server=https://$MINIKUBE_IP:$PORT --insecure-skip-tls-verify=true
+                        kubectl config set-cluster minikube --server=https://host.docker.internal:$PORT --insecure-skip-tls-verify=true
                         
                         kubectl cluster-info
                     '''
