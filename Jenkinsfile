@@ -38,16 +38,15 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "Configuring kubectl for minikube from Docker container"
-                        
-                        cp /var/jenkins_home/.kube/config /tmp/kubeconfig
-                        export KUBECONFIG=/tmp/kubeconfig
-                        
-                        MINIKUBE_SERVER=$(kubectl config view --raw -o jsonpath='{.clusters[?(@.name=="minikube")].cluster.server}')
-                        PORT=$(echo $MINIKUBE_SERVER | sed 's/.*://')
-                        kubectl config set-cluster minikube --server=https://host.docker.internal:$PORT --insecure-skip-tls-verify=true
-                        
-                        kubectl cluster-info
+                        if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+                            echo "Using in-cluster configuration"
+                            kubectl config set-cluster kubernetes --server=https://kubernetes.default.svc --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                            kubectl config set-credentials jenkins --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                            kubectl config set-context kubernetes --cluster=kubernetes --user=jenkins
+                            kubectl config use-context kubernetes
+                        else
+                            echo "Using external kubeconfig"
+                        fi
                     '''
                 }
             }
