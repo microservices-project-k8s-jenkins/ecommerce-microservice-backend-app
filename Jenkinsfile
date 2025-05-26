@@ -118,14 +118,13 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        if [ -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
-                            echo "Using in-cluster configuration"
-                            kubectl config set-cluster kubernetes --server=https://kubernetes.default.svc --certificate-authority=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-                            kubectl config set-credentials jenkins --token=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-                            kubectl config set-context kubernetes --cluster=kubernetes --user=jenkins
-                            kubectl config use-context kubernetes
+                        if [ -f /var/jenkins_home/.kube/config ]; then
+                            echo "Using kubeconfig from mounted volume"
+                            export KUBECONFIG=/var/jenkins_home/.kube/config
+                            kubectl cluster-info
                         else
-                            echo "Using external kubeconfig"
+                            echo "ERROR: No kubeconfig found"
+                            exit 1
                         fi
                     '''
                 }
