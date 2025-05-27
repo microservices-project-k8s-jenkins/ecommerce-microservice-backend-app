@@ -175,6 +175,17 @@ pipeline {
                 }
             }
         }
+        stage('Generate Release Notes') {
+            steps {
+                script {
+                    sh '''
+                        git log -n 20 --pretty=format:"* %s (%an)" > release-notes.md
+                        cat release-notes.md
+                    '''
+                    archiveArtifacts artifacts: 'release-notes.md', onlyIfSuccessful: true
+                }
+            }
+        }
     }
     post {
         always {
