@@ -5,7 +5,6 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.TF_REGION }}
-  ECR_REGISTRY: "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.TF_REGION }}.amazonaws.com"
   TAG: ${{ github.run_number }}
 
 jobs:
@@ -25,8 +24,14 @@ jobs:
         region: ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
-      id: login-ecr
       uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Get AWS Account ID
+      id: aws-info
+      run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
+
+    - name: Set ECR registry variable
+      run: echo "ECR_REGISTRY=${{ steps.aws-info.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com" >> $GITHUB_ENV
 
     - name: Clone Helm charts
       run: git clone https://github.com/microservices-project-k8s-jenkins/ecommerce-chart.git
