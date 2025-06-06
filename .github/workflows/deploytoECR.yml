@@ -1,52 +1,94 @@
-name: Build, Push to ECR, and Trigger ArgoCD Chart Update
+name: Build, Push to ECR, and Trigger Chart Update (Single Job)
 
 on:
-  workflow_dispatch: # Allows manual triggering
+  workflow_dispatch: # Permite disparo manual
   push:
     branches:
-      - main # Or your default branch, triggers on push to this branch
+      - main # O tu rama por defecto
 
 permissions:
-  contents: read    # To checkout the repo
-  id-token: write   # Required for aws-actions/configure-aws-credentials if using OIDC role-based auth
-  actions: write    # To dispatch repository events (if CHARTS_REPO_TOKEN is scoped for this)
+  contents: read    # Para hacer checkout del repo
+  id-token: write   # Requerido por aws-actions/configure-aws-credentials si usas OIDC
+  # actions: write # 'github-script' usa GITHUB_TOKEN por defecto para la API,
+                   # pero el token que le pasamos explícitamente (CHARTS_REPO_TOKEN) es para el dispatch.
 
 env:
-  # Secrets must be configured in GitHub repository settings
   AWS_REGION: ${{ secrets.TF_REGION }}
-  ECR_REPOSITORY_NAME: ${{ secrets.TF_ECR_NAME }} # Just the name, e.g., "proyectofinallsjecr"
-  TAG_VERSION: ${{ github.run_number }} # Uses the workflow run number as a version
+  ECR_REPOSITORY_NAME: ${{ secrets.TF_ECR_NAME }} # Solo el nombre, e.g., "proyectofinallsjecr"
+  TAG_VERSION: ${{ github.run_number }}
 
 jobs:
-  build-and-push:
+  build-push-and-trigger: # Nombre del único job
     runs-on: ubuntu-22.04
-    outputs:
-      # This output will be used by the trigger-chart-update job
-      ecr_registry_uri: ${{ steps.login-ecr.outputs.registry }}
+    # No outputs de job necesarios ya que todo es en un solo job
 
     steps:
     - name: Checkout Microservices Repository
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 20 # Para 'git log' en las notas de release
 
     - name: Set up AWS credentials
+      id: aws-creds # ID para acceder a sus posibles outputs (como aws-account-id)
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Optional: if using temporary credentials
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Opcional
         aws-region: ${{ env.AWS_REGION }}
+        # Si usas un rol IAM para obtener credenciales:
+        # role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }} # Descomenta si usas un rol
+        # role-session-name: GitHubActionsECRSession
+        mask-aws-account-id: 'no' # Para asegurar que el account ID esté disponible si la acción lo provee
+
+    - name: DEBUG - AWS Account ID from aws-creds (if available)
+      # Este output depende de la versión y configuración de configure-aws-credentials
+      run: echo "AWS Account ID from aws-creds step: ${{ steps.aws-creds.outputs.aws-account-id }}"
 
     - name: Login to Amazon ECR
-      id: login-ecr # Step ID to reference its outputs
+      id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: DEBUG - Check ECR Login Step Output
-      # This step is crucial. It runs immediately after the login.
+    - name: Determine ECR Registry URI and Set as Env Var
+      id: set-ecr-uri
       run: |
-        echo "--- DEBUG INFO from build-and-push job ---"
-        echo "Output 'registry' from login-ecr step: '${{ steps.login-ecr.outputs.registry }}'"
-        echo "Output 'registry-12-digits' from login-ecr step (alternative): '${{ steps.login-ecr.outputs.registry-12-digits }}'" # Some versions might offer this
-        echo "--- END DEBUG INFO ---"
+        ECR_URI_FROM_LOGIN="${{ steps.login-ecr.outputs.registry }}"
+        # El AWS Account ID puede no estar disponible directamente como output de aws-creds
+        # Si es así, lo obtenemos con aws cli:
+        AWS_ACCOUNT_ID_CLI=$(aws sts get-caller-identity --query Account --output text)
+        AWS_REGION_ENV="${{ env.AWS_REGION }}"
+        
+        FINAL_ECR_URI=""
+
+        echo "ECR URI from login-ecr step: '$ECR_URI_FROM_LOGIN'"
+        echo "AWS Account ID from CLI: '$AWS_ACCOUNT_ID_CLI'"
+        echo "AWS Region from env: '$AWS_REGION_ENV'"
+
+        if [ -n "$ECR_URI_FROM_LOGIN" ]; then
+          FINAL_ECR_URI="$ECR_URI_FROM_LOGIN"
+          echo "Using ECR URI from login-ecr step output: $FINAL_ECR_URI"
+        elif [ -n "$AWS_ACCOUNT_ID_CLI" ] && [ "$AWS_ACCOUNT_ID_CLI" != "None" ] && [ -n "$AWS_REGION_ENV" ]; then
+          FINAL_ECR_URI="${AWS_ACCOUNT_ID_CLI}.dkr.ecr.${AWS_REGION_ENV}.amazonaws.com"
+          echo "Constructed ECR URI manually: $FINAL_ECR_URI"
+        else
+          echo "::error::Could not determine ECR URI from login step output or by manual construction."
+          # Considerar salir si es crítico: exit 1
+        fi
+        
+        if [ -z "$FINAL_ECR_URI" ]; then
+          echo "::error::FINAL_ECR_URI determined to be empty. This will cause downstream failures."
+          exit 1 # Fallar el step si la URI no se puede determinar
+        fi
+        
+        # Establecer como variable de entorno para steps subsecuentes en este job
+        echo "ECR_REGISTRY_URI_ENV=$FINAL_ECR_URI" >> $GITHUB_ENV
+        # También como output del step por si se quiere referenciar así (aunque GITHUB_ENV es más directo)
+        echo "registry_uri_output=$FINAL_ECR_URI" >> $GITHUB_OUTPUT
+
+    - name: DEBUG - ECR URI for subsequent steps
+      run: |
+        echo "ECR URI from GITHUB_ENV: ${{ env.ECR_REGISTRY_URI_ENV }}"
+        echo "ECR URI from step output: ${{ steps.set-ecr-uri.outputs.registry_uri_output }}"
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -55,7 +97,7 @@ jobs:
         java-version: '17'
 
     - name: Build with Maven
-      run: ./mvnw clean package -DskipTests # Skipping tests for CI speed; adjust as needed
+      run: ./mvnw clean package -DskipTests
 
     - name: Create single ECR repository if it doesn't exist
       run: |
@@ -65,44 +107,29 @@ jobs:
           --repository-name ${{ env.ECR_REPOSITORY_NAME }} \
           --region ${{ env.AWS_REGION }} \
           --image-tag-mutability MUTABLE \
-          --image-scanning-configuration scanOnPush=true # Optional: enable image scanning
+          --image-scanning-configuration scanOnPush=true
         echo "ECR repository check/creation complete."
 
     - name: Build and Push Docker Images to Single ECR Repository
+      env: # Hacer la ECR URI disponible como env var directamente en este step
+        ECR_REGISTRY_URI_FOR_DOCKER: ${{ env.ECR_REGISTRY_URI_ENV }}
       run: |
-        ECR_REGISTRY_URI="${{ steps.login-ecr.outputs.registry }}" # Get ECR registry from login step output
-
-        if [ -z "$ECR_REGISTRY_URI" ]; then
-          echo "CRITICAL ERROR in build-and-push: ECR_REGISTRY_URI is empty after login step. Aborting."
+        if [ -z "$ECR_REGISTRY_URI_FOR_DOCKER" ]; then
+          echo "CRITICAL ERROR in build-and-push: ECR_REGISTRY_URI_FOR_DOCKER is empty. Aborting Docker build/push."
           exit 1
         fi
         
-        echo "ECR Registry URI for Docker build/push: $ECR_REGISTRY_URI"
-        echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
-        
-        echo "ECR Registry URI: $ECR_REGISTRY_URI"
+        echo "ECR Registry URI for Docker build/push: $ECR_REGISTRY_URI_FOR_DOCKER"
         echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
 
-        # List all your microservice directory names that contain Dockerfiles
         services=(
-          cloud-config
-          service-discovery
-          api-gateway
-          proxy-client
-          # frontend # Uncomment if frontend is built as a Docker image here
-          order-service
-          payment-service
-          product-service
-          shipping-service
-          user-service
-          favourite-service
+          cloud-config service-discovery api-gateway proxy-client
+          order-service payment-service product-service
+          shipping-service user-service favourite-service
         )
 
         for service_dir_name in "${services[@]}"; do
           echo "Processing service: $service_dir_name"
-          
-          # Assuming Dockerfile is at the root of each service's directory (e.g., cloud-config/Dockerfile)
-          # And the context for the build is that service's directory.
           CONTEXT_PATH="./${service_dir_name}"
           DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
 
@@ -111,88 +138,60 @@ jobs:
             continue
           fi
           
-          # Image tags will be like: ECR_URI/proyectofinallsjecr:cloud-config-123
-          IMAGE_TAG_VERSIONED="$ECR_REGISTRY_URI/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-${{ env.TAG_VERSION }}"
-          IMAGE_TAG_LATEST="$ECR_REGISTRY_URI/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-latest"
+          IMAGE_TAG_VERSIONED="$ECR_REGISTRY_URI_FOR_DOCKER/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-${{ env.TAG_VERSION }}"
+          IMAGE_TAG_LATEST="$ECR_REGISTRY_URI_FOR_DOCKER/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-latest"
           
           echo "Building image: $IMAGE_TAG_VERSIONED from context $CONTEXT_PATH using $DOCKERFILE_PATH"
           docker build -t "$IMAGE_TAG_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
-          
-          echo "Tagging image as latest: $IMAGE_TAG_LATEST"
           docker tag "$IMAGE_TAG_VERSIONED" "$IMAGE_TAG_LATEST"
-          
           echo "Pushing versioned tag: $IMAGE_TAG_VERSIONED"
           docker push "$IMAGE_TAG_VERSIONED"
-          
           echo "Pushing latest tag: $IMAGE_TAG_LATEST"
           docker push "$IMAGE_TAG_LATEST"
           echo "Finished processing $service_dir_name."
         done
 
-  trigger-chart-update:
-    needs: build-and-push # Ensures build-and-push completes first and its outputs are available
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout Microservices Repository (for git log)
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 20 # Fetch enough history for release notes; 0 for all.
-
-    - name: Debug ECR URI from build-and-push job
-      run: |
-        echo "Received ECR Registry URI from previous job: ${{ needs.build-and-push.outputs.ecr_registry_uri }}"
-
     - name: Trigger chart repository update
       uses: actions/github-script@v7
+      env: # Hacer la ECR URI disponible como env var directamente en este step para el script
+        SCRIPT_ECR_REGISTRY_URI: ${{ env.ECR_REGISTRY_URI_ENV }}
       with:
-        # This token (PAT) needs 'repo' scope if ecommerce-chart is private,
-        # or rights to trigger repository_dispatch events on microservices-project-k8s-jenkins/ecommerce-chart.
-        github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
+        github-token: ${{ secrets.CHARTS_REPO_TOKEN }} # PAT para disparar el evento en el repo de charts
         script: |
-          const source_branch = '${{ github.ref_name }}'; // Branch of this microservices repo
-          const base_version_tag = '${{ env.TAG_VERSION }}'; // e.g., "7" (from github.run_number)
-          const ecr_registry_uri = '${{ needs.build-and-push.outputs.ecr_registry_uri }}';
-          const ecr_repository_name = '${{ env.ECR_REPOSITORY_NAME }}'; // e.g., "proyectofinallsjecr"
+          const source_branch = '${{ github.ref_name }}';
+          const base_version_tag = '${{ env.TAG_VERSION }}';
+          // Acceder a la variable de entorno directamente
+          const ecr_registry_uri = process.env.SCRIPT_ECR_REGISTRY_URI; 
+          const ecr_repository_name = '${{ env.ECR_REPOSITORY_NAME }}';
 
           console.log(`Source Branch: ${source_branch}`);
           console.log(`Base Version Tag: ${base_version_tag}`);
-          console.log(`ECR Registry URI: ${ecr_registry_uri}`);
+          console.log(`ECR Registry URI (from env for script): ${ecr_registry_uri}`);
           console.log(`ECR Repository Name: ${ecr_repository_name}`);
 
           if (!ecr_registry_uri || ecr_registry_uri.trim() === "") {
-            core.setFailed('Critical Error: ecr_registry_uri is empty. Cannot dispatch event.');
+            core.setFailed('Critical Error: ecr_registry_uri is empty for github-script. Cannot dispatch event.');
             return;
           }
-          if (!ecr_repository_name || ecr_repository_name.trim() === "") {
-            core.setFailed('Critical Error: ecr_repository_name is empty. Cannot dispatch event.');
-            return;
-          }
-
+          // ... (resto del script de github-script igual que antes)
           const services_to_update = [
             'cloud-config', 'service-discovery', 'api-gateway', 'proxy-client',
-            // 'frontend', 
             'order-service', 'payment-service', 'product-service', 
             'shipping-service', 'user-service', 'favourite-service'
           ];
           
-          const owner = 'microservices-project-k8s-jenkins'; // Owner of ecommerce-chart repo
-          const repo = 'ecommerce-chart';                   // Name of ecommerce-chart repo
+          const owner = 'microservices-project-k8s-jenkins';
+          const repo = 'ecommerce-chart';                   
           
           console.log(`Dispatching 'update-image-tags' event to ${owner}/${repo}`);
           await github.rest.repos.createDispatchEvent({
-            owner: owner,
-            repo: repo,
-            event_type: 'update-image-tags', // This type must be handled by a workflow in ecommerce-chart
+            owner: owner, repo: repo, event_type: 'update-image-tags',
             client_payload: {
-              source_branch: source_branch,
-              base_version_tag: base_version_tag,
-              ecr_registry_uri: ecr_registry_uri,
-              ecr_repository_name: ecr_repository_name,
+              source_branch: source_branch, base_version_tag: base_version_tag,
+              ecr_registry_uri: ecr_registry_uri, ecr_repository_name: ecr_repository_name,
               services_to_update: services_to_update
             }
           });
-          
           console.log(`Successfully triggered chart update for services with base version tag ${base_version_tag}.`);
 
     - name: Generate Release Notes
@@ -210,11 +209,13 @@ jobs:
         path: release-notes.md
 
     - name: Deployment Summary
+      env: # Hacer la ECR URI disponible como env var directamente en este step para el resumen
+        SUMMARY_ECR_REGISTRY_URI: ${{ env.ECR_REGISTRY_URI_ENV }}
       run: |
         echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
         echo "- **Source Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Base Image Version Tag:** ${{ env.TAG_VERSION }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **ECR Registry URI:** ${{ needs.build-and-push.outputs.ecr_registry_uri }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **ECR Registry URI:** ${SUMMARY_ECR_REGISTRY_URI}" >> $GITHUB_STEP_SUMMARY
         echo "- **ECR Repository Name:** ${{ env.ECR_REPOSITORY_NAME }}" >> $GITHUB_STEP_SUMMARY
         echo "- **Target Chart Repository for Update Event:** microservices-project-k8s-jenkins/ecommerce-chart" >> $GITHUB_STEP_SUMMARY
         echo "- **ArgoCD will sync changes after the chart repository is updated by its own workflow.**" >> $GITHUB_STEP_SUMMARY
