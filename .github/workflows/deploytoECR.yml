@@ -43,7 +43,8 @@ jobs:
 
     - name: DEBUG - AWS Account ID from aws-creds (if available)
       # Este output depende de la versión y configuración de configure-aws-credentials
-      run: echo "AWS Account ID from aws-creds step: ${{ steps.aws-creds.outputs.aws-account-id }}"
+      run: |
+        echo "AWS Account ID from aws-creds step: ${{ steps.aws-creds.outputs.aws-account-id }}"
 
     - name: Login to Amazon ECR
       id: login-ecr
