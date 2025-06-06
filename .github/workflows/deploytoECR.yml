@@ -13,18 +13,18 @@ jobs:
 
     steps:
     - name: Checkout repo
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up AWS credentials
-      uses: aws-actions/configure-aws-credentials@v2
+      uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-        region: ${{ env.AWS_REGION }}
+        aws-region: ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
-      uses: aws-actions/amazon-ecr-login@v1
+      uses: aws-actions/amazon-ecr-login@v2
 
     - name: Get AWS Account ID
       id: aws-info
@@ -37,7 +37,7 @@ jobs:
       run: git clone https://github.com/microservices-project-k8s-jenkins/ecommerce-chart.git
 
     - name: Set up JDK 17
-      uses: actions/setup-java@v3
+      uses: actions/setup-java@v4
       with:
         distribution: 'temurin'
         java-version: '17'
@@ -120,7 +120,7 @@ jobs:
 
     - name: Upload Release Notes
       if: success() && hashFiles('release-notes.md') != ''
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: release-notes
         path: release-notes.md
