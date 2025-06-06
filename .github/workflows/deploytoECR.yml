@@ -9,7 +9,7 @@ env:
 
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout repo
@@ -120,7 +120,7 @@ jobs:
 
     - name: Upload Release Notes
       if: success() && hashFiles('release-notes.md') != ''
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v3.1.3
       with:
         name: release-notes
         path: release-notes.md
