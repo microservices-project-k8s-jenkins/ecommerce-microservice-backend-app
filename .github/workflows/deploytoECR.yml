@@ -40,6 +40,14 @@ jobs:
       id: login-ecr # Step ID to reference its outputs
       uses: aws-actions/amazon-ecr-login@v2
 
+    - name: DEBUG - Check ECR Login Step Output
+      # This step is crucial. It runs immediately after the login.
+      run: |
+        echo "--- DEBUG INFO from build-and-push job ---"
+        echo "Output 'registry' from login-ecr step: '${{ steps.login-ecr.outputs.registry }}'"
+        echo "Output 'registry-12-digits' from login-ecr step (alternative): '${{ steps.login-ecr.outputs.registry-12-digits }}'" # Some versions might offer this
+        echo "--- END DEBUG INFO ---"
+
     - name: Set up JDK 17
       uses: actions/setup-java@v4
       with:
@@ -63,6 +71,15 @@ jobs:
     - name: Build and Push Docker Images to Single ECR Repository
       run: |
         ECR_REGISTRY_URI="${{ steps.login-ecr.outputs.registry }}" # Get ECR registry from login step output
+
+        if [ -z "$ECR_REGISTRY_URI" ]; then
+          echo "CRITICAL ERROR in build-and-push: ECR_REGISTRY_URI is empty after login step. Aborting."
+          exit 1
+        fi
+        
+        echo "ECR Registry URI for Docker build/push: $ECR_REGISTRY_URI"
+        echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
+        
         echo "ECR Registry URI: $ECR_REGISTRY_URI"
         echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
 
