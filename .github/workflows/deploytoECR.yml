@@ -69,7 +69,11 @@ jobs:
         done
 
     - name: Set up kubectl
-      uses: azure/setup-kubectl@v3
+      run: |
+        curl -LO "https://dl.k8s.io/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+        kubectl version --client
 
     - name: Update kubeconfig for EKS
       run: |
@@ -115,6 +119,7 @@ jobs:
         cat release-notes.md
 
     - name: Upload Release Notes
+      if: success() && hashFiles('release-notes.md') != ''
       uses: actions/upload-artifact@v3
       with:
         name: release-notes
