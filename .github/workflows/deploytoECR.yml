@@ -1,22 +1,29 @@
-name: Deploy Microservices to AWS EKS with ArgoCD
+name: Build, Push to ECR, and Trigger ArgoCD Chart Update
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: read
+  id-token: write # Required for aws-actions/configure-aws-credentials if using OIDC
   actions: write
   repository-projects: write
 
 env:
   AWS_REGION: ${{ secrets.TF_REGION }}
-  TAG: ${{ github.run_number }}
-  ECR_REGISTRY: ${{ secrets.TF_ECR_NAME }}
+  TAG_VERSION: ${{ github.run_number }}
+  # TF_ECR_NAME is the NAME of your single ECR repository (e.g., "ecommerce-microservices")
+  ECR_REPOSITORY_NAME: ${{ secrets.TF_ECR_NAME }}
+  # You'll also need your AWS Account ID for constructing the full ECR path in values.yaml,
+  # or derive the registry URI from the login step.
+  # If TF_ECR_NAME from secrets is already the full URI like "ACCOUNT.dkr.ecr.REGION.amazonaws.com/repo-name",
+  # then adjust accordingly. Assuming TF_ECR_NAME is just the repo name.
 
 jobs:
   build-and-push:
     runs-on: ubuntu-22.04
+    outputs:
+      ecr_registry_uri: ${{ steps.login-ecr.outputs.registry }}
 
     steps:
     - name: Checkout repo
@@ -27,10 +34,11 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Optional, if using temporary credentials
         aws-region: ${{ env.AWS_REGION }}
 
     - name: Login to Amazon ECR
+      id: login-ecr # Give an ID to this step to access its outputs
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Set up JDK 17
@@ -40,15 +48,26 @@ jobs:
         java-version: '17'
 
     - name: Build with Maven
-      run: ./mvnw clean package
+      run: ./mvnw clean package -DskipTests # Skipping tests for faster build in CI, adjust as needed
 
-    - name: Create ECR repositories if they don't exist
+    - name: Create single ECR repository if it doesn't exist
       run: |
+        echo "Checking/Creating ECR repository: ${{ env.ECR_REPOSITORY_NAME }}"
+        aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY_NAME }} --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || \
+        aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY_NAME }} --region ${{ env.AWS_REGION }} --image-tag-mutability MUTABLE
+
+    - name: Build and Push Docker Images to Single ECR Repository
+      run: |
+        ECR_REGISTRY_URI=${{ steps.login-ecr.outputs.registry }} # Get registry URI from login step
+        echo "ECR Registry URI: $ECR_REGISTRY_URI"
+        echo "ECR Repository Name: ${{ env.ECR_REPOSITORY_NAME }}"
+
         services=(
           cloud-config
           service-discovery
           api-gateway
           proxy-client
+          # frontend # Assuming frontend is also a Docker image built similarly
           order-service
           payment-service
           product-service
@@ -58,32 +77,54 @@ jobs:
         )
 
         for service in "${services[@]}"; do
-          echo "Creating ECR repository for $service if it doesn't exist"
-          aws ecr describe-repositories --repository-names $service --region ${{ env.AWS_REGION }} 2>/dev/null || \
-          aws ecr create-repository --repository-name $service --region ${{ env.AWS_REGION }}
-        done
+          SERVICE_DIR_NAME=$service # Assuming directory name matches service name
+          if [ "$service" == "proxy-client" ]; then # Example: if Dockerfile is not in root of service folder
+             SERVICE_DIR_NAME="proxy-client" # Adjust if your proxy-client's Dockerfile is elsewhere or needs special path
+          elif [ "$service" == "frontend" ]; then # Example for frontend
+             SERVICE_DIR_NAME="frontend" # Assuming frontend has its own Dockerfile in its directory
+          fi
+          
+          # Check if service directory and Dockerfile exist
+          if [ ! -d "$SERVICE_DIR_NAME" ]; then
+            echo "Warning: Directory $SERVICE_DIR_NAME not found. Skipping $service."
+            continue
+          fi
+          if [ ! -f "$SERVICE_DIR_NAME/Dockerfile" ]; then
+             # Common pattern: Dockerfile might be in root of the service module
+             # and mvnw package puts jar in service_module_name/target/
+             # So context is service_module_name, Dockerfile adds target/*.jar
+             if [ -f "$SERVICE_DIR_NAME/Dockerfile" ]; then
+                DOCKERFILE_PATH="$SERVICE_DIR_NAME/Dockerfile"
+                CONTEXT_PATH="$SERVICE_DIR_NAME"
+             # Or if Dockerfiles are in a central location, adjust context
+             # elif [ -f "dockerfiles/$service/Dockerfile" ]; then
+             #    DOCKERFILE_PATH="dockerfiles/$service/Dockerfile"
+             #    CONTEXT_PATH="." # Or specific service path if ADD needs it
+             else
+                echo "Warning: Dockerfile for $service not found in $SERVICE_DIR_NAME. Skipping $service."
+                continue
+             fi
+          else
+            DOCKERFILE_PATH="$SERVICE_DIR_NAME/Dockerfile" # Default assumption
+            CONTEXT_PATH="$SERVICE_DIR_NAME"
+          fi
 
-    - name: Build and Push Docker Images
-      run: |
-        services=(
-          cloud-config
-          service-discovery
-          api-gateway
-          proxy-client
-          order-service
-          payment-service
-          product-service
-          shipping-service
-          user-service
-          favourite-service
-        )
-
-        for service in "${services[@]}"; do
-          echo "Building and pushing $service"
-          docker build -t $ECR_REGISTRY/$service:$TAG $service
-          docker tag $ECR_REGISTRY/$service:$TAG $ECR_REGISTRY/$service:latest
-          docker push $ECR_REGISTRY/$service:$TAG
-          docker push $ECR_REGISTRY/$service:latest
+          echo "Building and pushing $service from $CONTEXT_PATH using $DOCKERFILE_PATH"
+          
+          IMAGE_TAG_VERSIONED="$ECR_REGISTRY_URI/${{ env.ECR_REPOSITORY_NAME }}:$service-${{ env.TAG_VERSION }}"
+          IMAGE_TAG_LATEST="$ECR_REGISTRY_URI/${{ env.ECR_REPOSITORY_NAME }}:$service-latest"
+          
+          echo "Building image: $IMAGE_TAG_VERSIONED"
+          docker build -t $IMAGE_TAG_VERSIONED -f $DOCKERFILE_PATH $CONTEXT_PATH
+          
+          echo "Tagging image as latest: $IMAGE_TAG_LATEST"
+          docker tag $IMAGE_TAG_VERSIONED $IMAGE_TAG_LATEST
+          
+          echo "Pushing versioned tag: $IMAGE_TAG_VERSIONED"
+          docker push $IMAGE_TAG_VERSIONED
+          
+          echo "Pushing latest tag: $IMAGE_TAG_LATEST"
+          docker push $IMAGE_TAG_LATEST
         done
 
   trigger-chart-update:
@@ -94,37 +135,53 @@ jobs:
     - name: Trigger chart repository update
       uses: actions/github-script@v7
       with:
-        github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
+        github-token: ${{ secrets.CHARTS_REPO_TOKEN }} # A PAT with repo scope for ecommerce-chart
         script: |
-          const branch = '${{ github.ref_name }}';
-          const tag = '${{ env.TAG }}';
+          const branch = '${{ github.ref_name }}'; // Branch of this microservices repo
+          const version_tag = '${{ env.TAG_VERSION }}'; // This is github.run_number
+          const ecr_registry_uri = '${{ needs.build-and-push.outputs.ecr_registry_uri }}';
+          const ecr_repository_name = '${{ env.ECR_REPOSITORY_NAME }}';
+
+          const services_to_update = [
+            'cloud-config',
+            'service-discovery',
+            'api-gateway',
+            'proxy-client',
+            // 'frontend',
+            'order-service',
+            'payment-service',
+            'product-service',
+            'shipping-service',
+            'user-service',
+            'favourite-service'
+          ];
           
+          // The receiving workflow in ecommerce-chart will be responsible for iterating
+          // through 'services' and constructing the full image tag for each service
+          // using 'version_tag' (e.g., cloud-config-${version_tag}) and updating
+          // the 'repository' field to `${ecr_registry_uri}/${ecr_repository_name}`.
+
           await github.rest.repos.createDispatchEvent({
-            owner: 'microservices-project-k8s-jenkins',
-            repo: 'ecommerce-chart',
+            owner: 'microservices-project-k8s-jenkins', // Owner of ecommerce-chart
+            repo: 'ecommerce-chart',                     // Name of ecommerce-chart repo
             event_type: 'update-image-tags',
             client_payload: {
-              branch: branch,
-              tag: tag,
-              services: [
-                'cloud-config',
-                'service-discovery',
-                'api-gateway',
-                'proxy-client',
-                'order-service',
-                'payment-service',
-                'product-service',
-                'shipping-service',
-                'user-service',
-                'favourite-service'
-              ]
+              source_branch: branch,
+              base_version_tag: version_tag, // e.g., "6"
+              ecr_registry_uri: ecr_registry_uri, // e.g., "ACCOUNT.dkr.ecr.REGION.amazonaws.com"
+              ecr_repository_name: ecr_repository_name, // e.g., "my-ecommerce-repo"
+              services_to_update: services_to_update
             }
           });
           
-          console.log(`Triggered chart update for branch ${branch} with tag ${tag}`);
+          console.log(`Triggered chart update for services with base version tag ${version_tag}.`);
+          console.log(`ECR Registry URI: ${ecr_registry_uri}`);
+          console.log(`ECR Repository Name: ${ecr_repository_name}`);
 
     - name: Generate Release Notes
       run: |
+        # Ensure you are on the correct commit if needed, or use existing checkout
+        # This will get notes from the microservices repo commits
         git log -n 20 --pretty=format:"* %s (%an)" > release-notes.md
         cat release-notes.md
 
@@ -132,14 +189,27 @@ jobs:
       if: success() && hashFiles('release-notes.md') != ''
       uses: actions/upload-artifact@v4
       with:
-        name: release-notes-${{ env.TAG }}
+        name: release-notes-${{ env.TAG_VERSION }}
         path: release-notes.md
 
     - name: Summary
       run: |
         echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Tag:** ${{ env.TAG }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **ECR Registry:** ${{ env.ECR_REGISTRY }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Updated Repository:** microservices-project-k8s-jenkins/ecommerce-chart" >> $GITHUB_STEP_SUMMARY
-        echo "- **ArgoCD will automatically sync the changes**" >> $GITHUB_STEP_SUMMARY
+        echo "- **Source Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Base Version Tag (Run Number):** ${{ env.TAG_VERSION }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **ECR Registry URI:** ${{ needs.build-and-push.outputs.ecr_registry_uri }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **ECR Repository Name:** ${{ env.ECR_REPOSITORY_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Updated Chart Repository:** microservices-project-k8s-jenkins/ecommerce-chart" >> $GITHUB_STEP_SUMMARY
+        echo "- **ArgoCD will automatically sync the changes once the chart is updated.**" >> $GITHUB_STEP_SUMMARY
+        echo "- **Services triggered for update:**" >> $GITHUB_STEP_SUMMARY
+        echo "  - cloud-config" >> $GITHUB_STEP_SUMMARY
+        echo "  - service-discovery" >> $GITHUB_STEP_SUMMARY
+        echo "  - api-gateway" >> $GITHUB_STEP_SUMMARY
+        echo "  - proxy-client" >> $GITHUB_STEP_SUMMARY
+        # echo "  - frontend" >> $GITHUB_STEP_SUMMARY
+        echo "  - order-service" >> $GITHUB_STEP_SUMMARY
+        echo "  - payment-service" >> $GITHUB_STEP_SUMMARY
+        echo "  - product-service" >> $GITHUB_STEP_SUMMARY
+        echo "  - shipping-service" >> $GITHUB_STEP_SUMMARY
+        echo "  - user-service" >> $GITHUB_STEP_SUMMARY
+        echo "  - favourite-service" >> $GITHUB_STEP_SUMMARY
