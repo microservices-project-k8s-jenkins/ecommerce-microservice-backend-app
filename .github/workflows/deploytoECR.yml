@@ -4,7 +4,7 @@ on:
   workflow_dispatch: # Permite disparo manual (usará 'dev' como entorno por defecto)
     inputs:
       target_branch_override:
-        description: 'Optional: Override target branch logic (dev, stage, main). Leave empty to use actual branch.'
+        description: 'Optional: Override target branch logic (dev, stage, master). Leave empty to use actual branch.'
         required: false
         type: string
   push:
