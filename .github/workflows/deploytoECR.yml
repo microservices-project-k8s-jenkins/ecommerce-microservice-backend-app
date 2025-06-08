@@ -1,38 +1,43 @@
-name: Build, Push to ECR, and Trigger Chart Update (Single Job, Multi-Branch)
+name: Deploy on PR Merge and Trigger Chart Update
 
 on:
-  workflow_dispatch: # Permite disparo manual (usará 'dev' como entorno por defecto)
-    inputs:
-      target_branch_override:
-        description: 'Optional: Override target branch logic (dev, stage, master). Leave empty to use actual branch.'
-        required: false
-        type: string
-  push:
-    branches:
-      - master
-      - stage
-      - dev
-  pull_request: # Opcional: si quieres disparar en PR cerrado y fusionado
+  pull_request:
     types:
-      - closed
+      - closed # Se dispara cuando un PR se cierra
     branches:
-      - main
+      - master # O main, tu rama principal de producción
       - stage
       - dev
+  workflow_dispatch: # Permite disparo manual
+    inputs:
+      simulated_pr_title:
+        description: 'Simulated PR Title (e.g., "Release v1.2.3" or "Feature v0.5.0")'
+        required: true
+        type: string
+      simulated_target_branch:
+        description: 'Simulated Target Branch (master, stage, or dev)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stage
+          - master # Asegúrate que coincida con tus nombres de rama (master o main)
+        default: 'master'
 
 permissions:
   contents: read    # Para hacer checkout del repo
   id-token: write   # Requerido por aws-actions/configure-aws-credentials si usas OIDC
+  pull-requests: read # Para leer el título del PR
 
 env:
   AWS_REGION: ${{ secrets.TF_REGION }}
-  ECR_REPOSITORY_NAME: ${{ secrets.TF_ECR_NAME }} # Solo el nombre, e.g., "proyectofinallsjecr"
+  # ECR_REPOSITORY_NAME ya no es global, se define por servicio
 
 jobs:
-  build-push-and-trigger:
+  build-push-and-trigger-on-merge:
     runs-on: ubuntu-22.04
-    # Condición para pull_request: solo correr si fue fusionado
-    if: github.event_name != 'pull_request' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    # Condición crucial: solo correr si el PR fue fusionado (merged)
+    if: github.event.pull_request.merged == true
 
     steps:
     - name: Checkout Microservices Repository
@@ -40,56 +45,52 @@ jobs:
       with:
         fetch-depth: 20 # Para 'git log' en las notas de release
 
-    - name: Determine Target Environment and Tag Version
+    - name: Extract Version and Determine Environment
       id: set-env-details
       run: |
-        # Determinar la rama efectiva
-        EFFECTIVE_BRANCH_NAME=""
-        if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.target_branch_override }}" ]]; then
-          EFFECTIVE_BRANCH_NAME="${{ github.event.inputs.target_branch_override }}"
-          echo "Manual dispatch overriding branch to: $EFFECTIVE_BRANCH_NAME"
-        elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
-          EFFECTIVE_BRANCH_NAME="${{ github.base_ref }}" # Rama base del PR
-          echo "Pull request to base branch: $EFFECTIVE_BRANCH_NAME"
-        else
-          EFFECTIVE_BRANCH_NAME="${{ github.ref_name }}" # Rama del push
-          echo "Push to branch: $EFFECTIVE_BRANCH_NAME"
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        echo "Pull Request Title: $PR_TITLE"
+        
+        # Extraer version semántica (e.g., v1.2.3 o 1.2.3) del título del PR
+        # Esta regex busca "v" opcional, seguido de X.Y.Z
+        IMAGE_VERSION_FROM_PR=$(echo "$PR_TITLE" | sed -n 's/.*\b\(v\?[0-9]\+\.[0-9]\+\.[0-9]\+\)\b.*/\1/p')
+        
+        if [ -z "$IMAGE_VERSION_FROM_PR" ]; then
+          echo "::error::Could not extract semantic version (e.g., v1.2.3 or 1.2.3) from PR title: '$PR_TITLE'."
+          exit 1
         fi
+        echo "Extracted Image Version: $IMAGE_VERSION_FROM_PR"
 
+        # La rama efectiva es la rama base a la que se fusionó el PR
+        EFFECTIVE_BRANCH_NAME="${{ github.base_ref }}"
+        echo "Effective branch (PR base_ref): $EFFECTIVE_BRANCH_NAME"
+        
         TARGET_VALUES_FILE=""
-        TAG_PREFIX="" # Para diferenciar tags de imagen en ECR si se desea
+        ENVIRONMENT_NAME="" # dev, stage, prod
 
         if [[ "$EFFECTIVE_BRANCH_NAME" == "main" || "$EFFECTIVE_BRANCH_NAME" == "master" ]]; then
           TARGET_VALUES_FILE="values-master.yaml"
-          TAG_PREFIX="prod"
+          ENVIRONMENT_NAME="prod" # Usar 'prod' para ECR repo name si la rama es master/main
         elif [[ "$EFFECTIVE_BRANCH_NAME" == "stage" ]]; then
           TARGET_VALUES_FILE="values-stage.yaml"
-          TAG_PREFIX="stage"
+          ENVIRONMENT_NAME="stage"
         elif [[ "$EFFECTIVE_BRANCH_NAME" == "dev" ]]; then
           TARGET_VALUES_FILE="values-dev.yaml"
-          TAG_PREFIX="dev"
+          ENVIRONMENT_NAME="dev"
         else
-          echo "::warning::Branch '$EFFECTIVE_BRANCH_NAME' not configured for specific values file. Defaulting to dev settings."
-          TARGET_VALUES_FILE="values-dev.yaml" 
-          TAG_PREFIX="feature-$EFFECTIVE_BRANCH_NAME" # Prefijo para ramas no configuradas
+          echo "::error::PR merged to unhandled base branch '$EFFECTIVE_BRANCH_NAME'. Exiting."
+          exit 1
         fi
         
-        # Usar el run_number para la unicidad del tag, el prefijo es opcional para el tag de ECR
-        # Aquí combinamos el prefijo con el run_number para el tag de ECR, por ejemplo "dev-123"
-        # O podrías usar solo github.run_number si el prefijo no es necesario en el tag de la imagen
-        FINAL_TAG_VERSION="${TAG_PREFIX}-${{ github.run_number }}" # Ejemplo: dev-23, stage-24, prod-25
-        # Si prefieres solo el run_number para el TAG de la imagen:
-        # FINAL_TAG_VERSION="${{ github.run_number }}"
-
         echo "TARGET_VALUES_FILE_ENV=$TARGET_VALUES_FILE" >> $GITHUB_ENV
-        echo "TAG_VERSION_ENV=$FINAL_TAG_VERSION" >> $GITHUB_ENV # Este es el tag completo para la imagen
-        echo "BASE_TAG_NUMBER_ENV=${{ github.run_number }}" >> $GITHUB_ENV # Solo el número para el payload si se prefiere
-        echo "BRANCH_NAME_ENV=$EFFECTIVE_BRANCH_NAME" >> $GITHUB_ENV
+        echo "IMAGE_VERSION_ENV=$IMAGE_VERSION_FROM_PR" >> $GITHUB_ENV
+        echo "EFFECTIVE_BRANCH_NAME_ENV=$EFFECTIVE_BRANCH_NAME" >> $GITHUB_ENV # Rama real para lógica
+        echo "ENVIRONMENT_NAME_ENV=$ENVIRONMENT_NAME" >> $GITHUB_ENV # Para nombre de repo ECR
 
-        echo "Effective Branch for logic: $EFFECTIVE_BRANCH_NAME"
-        echo "Target values file determined: $TARGET_VALUES_FILE"
-        echo "Image Tag Version determined: $FINAL_TAG_VERSION (Base run number: ${{ github.run_number }})"
-        echo "Tag prefix: $TAG_PREFIX"
+        echo "Target values file: $TARGET_VALUES_FILE"
+        echo "Image Version for ECR Tag: $IMAGE_VERSION_FROM_PR"
+        echo "Environment for ECR Repo: $ENVIRONMENT_NAME"
+        echo "Effective Branch for chart values logic: $EFFECTIVE_BRANCH_NAME"
 
     - name: Set up AWS credentials
       id: aws-creds
@@ -97,121 +98,120 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }} # Opcional
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
         aws-region: ${{ env.AWS_REGION }}
         mask-aws-account-id: 'no'
-
-    - name: DEBUG - AWS Account ID (if available from aws-creds)
-      run: |
-        echo "AWS Account ID from aws-creds step: ${{ steps.aws-creds.outputs.aws-account-id }}"
 
     - name: Login to Amazon ECR
       id: login-ecr
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Determine ECR Registry URI and Set as Env Var
-      id: set-ecr-uri
+    - name: Determine Base ECR Registry URI
+      id: set-ecr-base-uri
       run: |
         ECR_URI_FROM_LOGIN="${{ steps.login-ecr.outputs.registry }}"
         AWS_ACCOUNT_ID_CLI=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "AWS_CLI_FAILED")
         AWS_REGION_ENV="${{ env.AWS_REGION }}"
-        FINAL_ECR_URI=""
-
-        echo "ECR URI from login-ecr step: '$ECR_URI_FROM_LOGIN'"
-        echo "AWS Account ID from CLI: '$AWS_ACCOUNT_ID_CLI'"
-        echo "AWS Region from env: '$AWS_REGION_ENV'"
+        FINAL_ECR_BASE_URI=""
 
         if [ -n "$ECR_URI_FROM_LOGIN" ]; then
-          FINAL_ECR_URI="$ECR_URI_FROM_LOGIN"
-          echo "Using ECR URI from login-ecr step output: $FINAL_ECR_URI"
+          FINAL_ECR_BASE_URI="$ECR_URI_FROM_LOGIN"
         elif [ -n "$AWS_ACCOUNT_ID_CLI" ] && [ "$AWS_ACCOUNT_ID_CLI" != "None" ] && [ "$AWS_ACCOUNT_ID_CLI" != "AWS_CLI_FAILED" ] && [ -n "$AWS_REGION_ENV" ]; then
-          FINAL_ECR_URI="${AWS_ACCOUNT_ID_CLI}.dkr.ecr.${AWS_REGION_ENV}.amazonaws.com"
-          echo "Constructed ECR URI manually: $FINAL_ECR_URI"
+          FINAL_ECR_BASE_URI="${AWS_ACCOUNT_ID_CLI}.dkr.ecr.${AWS_REGION_ENV}.amazonaws.com"
         else
-          echo "::error::Could not determine ECR URI. Login step output: '$ECR_URI_FROM_LOGIN'. AWS CLI Account ID: '$AWS_ACCOUNT_ID_CLI'."
+          echo "::error::Could not determine Base ECR Registry URI."
           exit 1
         fi
-        
-        echo "ECR_REGISTRY_URI_ENV=$FINAL_ECR_URI" >> $GITHUB_ENV
-        echo "registry_uri_output=$FINAL_ECR_URI" >> $GITHUB_OUTPUT # Para compatibilidad si algún step lo usa así
+        echo "ECR_BASE_REGISTRY_URI_ENV=$FINAL_ECR_BASE_URI" >> $GITHUB_ENV
 
-    - name: DEBUG - ECR URI for subsequent steps
+    - name: DEBUG - ECR URIs
       run: |
-        echo "ECR URI from GITHUB_ENV: ${{ env.ECR_REGISTRY_URI_ENV }}"
+        echo "Base ECR Registry URI from GITHUB_ENV: ${{ env.ECR_BASE_REGISTRY_URI_ENV }}"
+        echo "Target Environment for ECR repos: ${{ env.ENVIRONMENT_NAME_ENV }}"
+        echo "Image Version for ECR tags: ${{ env.IMAGE_VERSION_ENV }}"
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
+      with: 
+        distribution: 'temurin' 
         java-version: '17'
 
     - name: Build with Maven
       run: ./mvnw clean package -DskipTests
 
-    - name: Create single ECR repository if it doesn't exist
-      run: |
-        aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY_NAME }} --region ${{ env.AWS_REGION }} > /dev/null 2>&1 || \
-        aws ecr create-repository \
-          --repository-name ${{ env.ECR_REPOSITORY_NAME }} \
-          --region ${{ env.AWS_REGION }} \
-          --image-tag-mutability MUTABLE \
-          --image-scanning-configuration scanOnPush=true
-        echo "ECR repository check/creation complete."
-
-    - name: Build and Push Docker Images to Single ECR Repository
+    - name: Build, Tag, and Push Docker Images (Per Service ECR Repo)
       env:
-        ECR_REGISTRY_URI_FOR_DOCKER: ${{ env.ECR_REGISTRY_URI_ENV }}
-        IMAGE_VERSION_TAG: ${{ env.TAG_VERSION_ENV }} # Usar el tag completo (e.g., dev-23)
+        BASE_ECR_URI: ${{ env.ECR_BASE_REGISTRY_URI_ENV }}
+        ENV_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} # e.g., dev, stage, prod
+        IMAGE_TAG: ${{ env.IMAGE_VERSION_ENV }}    # e.g., v1.3.4
       run: |
-        if [ -z "$ECR_REGISTRY_URI_FOR_DOCKER" ]; then
-          echo "CRITICAL ERROR: ECR_REGISTRY_URI_FOR_DOCKER is empty. Aborting Docker build/push."
+        if [ -z "$BASE_ECR_URI" ] || [ -z "$ENV_NAME" ] || [ -z "$IMAGE_TAG" ]; then
+          echo "::error::Critical environment variables for ECR push are missing."
           exit 1
         fi
         services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
-        for service_dir_name in "${services[@]}"; do
-          CONTEXT_PATH="./${service_dir_name}"; DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
-          if [ ! -f "$DOCKERFILE_PATH" ]; then echo "Warning: Dockerfile $DOCKERFILE_PATH not found. Skipping $service_dir_name."; continue; fi
+        
+        for service_name in "${services[@]}"; do
+          # ECR Repo name: serviceName-environmentName (e.g., cloud-config-dev)
+          ECR_REPO_NAME_FOR_SERVICE="${service_name}-${ENV_NAME}"
+          echo "Processing service: $service_name for ECR repo: $ECR_REPO_NAME_FOR_SERVICE"
+
+          CONTEXT_PATH="./${service_name}"; DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
+          if [ ! -f "$DOCKERFILE_PATH" ]; then echo "::warning::Dockerfile $DOCKERFILE_PATH not found for $service_name. Skipping."; continue; fi
+
+          # Create ECR repository for the service if it doesn't exist
+          echo "Checking/Creating ECR repository: $ECR_REPO_NAME_FOR_SERVICE"
+          aws ecr describe-repositories --repository-names "$ECR_REPO_NAME_FOR_SERVICE" --region "${{ env.AWS_REGION }}" > /dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "$ECR_REPO_NAME_FOR_SERVICE" \
+            --region "${{ env.AWS_REGION }}" \
+            --image-tag-mutability MUTABLE \
+            --image-scanning-configuration scanOnPush=true
           
-          # Tag de la imagen: ECR_URI/repo_name:service_name-TAG_VERSION_ENV (e.g., cloud-config-dev-23)
-          IMAGE_TAG_VERSIONED="$ECR_REGISTRY_URI_FOR_DOCKER/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-${IMAGE_VERSION_TAG}"
-          IMAGE_TAG_LATEST="$ECR_REGISTRY_URI_FOR_DOCKER/${{ env.ECR_REPOSITORY_NAME }}:$service_dir_name-latest" # Considerar si 'latest' debe ser por rama
+          # Full image path with version tag: BASE_ECR_URI/serviceName-envName:versionTag
+          IMAGE_PATH_VERSIONED="$BASE_ECR_URI/$ECR_REPO_NAME_FOR_SERVICE:$IMAGE_TAG"
+          # Full image path with latest tag: BASE_ECR_URI/serviceName-envName:latest
+          IMAGE_PATH_LATEST="$BASE_ECR_URI/$ECR_REPO_NAME_FOR_SERVICE:latest" 
+          # Consider if 'latest' should be environment-specific, e.g. latest-dev, latest-stage
           
-          echo "Building image: $IMAGE_TAG_VERSIONED"
-          docker build -t "$IMAGE_TAG_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
-          docker tag "$IMAGE_TAG_VERSIONED" "$IMAGE_TAG_LATEST"
-          echo "Pushing: $IMAGE_TAG_VERSIONED"
-          docker push "$IMAGE_TAG_VERSIONED"
-          echo "Pushing: $IMAGE_TAG_LATEST"
-          docker push "$IMAGE_TAG_LATEST"
+          echo "Building image: $IMAGE_PATH_VERSIONED"
+          docker build -t "$IMAGE_PATH_VERSIONED" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
+          echo "Tagging as latest: $IMAGE_PATH_LATEST"
+          docker tag "$IMAGE_PATH_VERSIONED" "$IMAGE_PATH_LATEST"
+          
+          echo "Pushing: $IMAGE_PATH_VERSIONED"
+          docker push "$IMAGE_PATH_VERSIONED"
+          echo "Pushing: $IMAGE_PATH_LATEST"
+          docker push "$IMAGE_PATH_LATEST"
+          echo "Finished processing $service_name."
         done
 
     - name: Trigger chart repository update
       env:
-        SCRIPT_ECR_REGISTRY_URI: ${{ env.ECR_REGISTRY_URI_ENV }}
+        SCRIPT_ECR_BASE_REGISTRY_URI: ${{ env.ECR_BASE_REGISTRY_URI_ENV }}
         SCRIPT_TARGET_VALUES_FILE: ${{ env.TARGET_VALUES_FILE_ENV }}
-        SCRIPT_BRANCH_NAME: ${{ env.BRANCH_NAME_ENV }}
-        # Usar el TAG_VERSION_ENV (e.g. dev-23) o BASE_TAG_NUMBER_ENV (e.g. 23) para el payload
-        # Decidamos usar el TAG_VERSION_ENV completo para el payload, para que el chart sepa el prefijo
-        SCRIPT_IMAGE_TAG_TO_USE: ${{ env.TAG_VERSION_ENV }}
+        SCRIPT_EFFECTIVE_BRANCH_NAME: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }} # La rama a la que se hizo merge
+        SCRIPT_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }} # dev, stage, prod
+        SCRIPT_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }} # e.g., v1.3.4
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.CHARTS_REPO_TOKEN }}
         script: |
-          const source_branch_name = process.env.SCRIPT_BRANCH_NAME;
-          const image_tag_to_use_in_chart = process.env.SCRIPT_IMAGE_TAG_TO_USE; // e.g., dev-23
-          const ecr_registry_uri = process.env.SCRIPT_ECR_REGISTRY_URI;
-          const ecr_repository_name = '${{ env.ECR_REPOSITORY_NAME }}';
+          const effective_branch_name = process.env.SCRIPT_EFFECTIVE_BRANCH_NAME;
+          const image_version = process.env.SCRIPT_IMAGE_VERSION;
+          const ecr_base_registry_uri = process.env.SCRIPT_ECR_BASE_REGISTRY_URI;
           const target_values_file_in_chart = process.env.SCRIPT_TARGET_VALUES_FILE;
+          const environment_name_for_ecr = process.env.SCRIPT_ENVIRONMENT_NAME;
 
           console.log(`Dispatching Event Details:
-            Source Branch (Triggering): ${source_branch_name}
-            Image Tag to use in Chart: ${image_tag_to_use_in_chart} 
-            ECR Registry URI: ${ecr_registry_uri}
-            ECR Repository Name: ${ecr_repository_name}
-            Target Values File in Chart: ${target_values_file_in_chart}`);
+            Effective Branch (PR Merged Into): ${effective_branch_name}
+            Image Version (Tag for ECR): ${image_version}
+            Base ECR Registry URI: ${ecr_base_registry_uri}
+            Target Values File in Chart: ${target_values_file_in_chart}
+            Environment Name for ECR Repos: ${environment_name_for_ecr}`);
 
-          if (!ecr_registry_uri || !target_values_file_in_chart || !image_tag_to_use_in_chart) {
-            core.setFailed('Critical Error: ECR URI, Target Values File, or Image Tag is empty. Cannot dispatch.');
+          if (!ecr_base_registry_uri || !target_values_file_in_chart || !image_version || !environment_name_for_ecr) {
+            core.setFailed('Critical Error: Key details for dispatch are empty. Cannot dispatch.');
             return;
           }
           const services_to_update = ['cloud-config', 'service-discovery', 'api-gateway', 'proxy-client', 'order-service', 'payment-service', 'product-service', 'shipping-service', 'user-service', 'favourite-service'];
@@ -219,40 +219,48 @@ jobs:
           await github.rest.repos.createDispatchEvent({
             owner: 'microservices-project-k8s-jenkins', repo: 'ecommerce-chart', event_type: 'update-image-tags',
             client_payload: {
-              source_trigger_branch: source_branch_name, 
-              image_tag_for_services: image_tag_to_use_in_chart, // e.g. dev-23
-              ecr_registry_uri: ecr_registry_uri, 
-              ecr_repository_name: ecr_repository_name,
+              effective_branch: effective_branch_name, 
+              image_version_tag: image_version, 
+              ecr_base_uri: ecr_base_registry_uri, 
               services_to_update: services_to_update,
-              target_values_file: target_values_file_in_chart 
+              target_values_file: target_values_file_in_chart,
+              environment_name: environment_name_for_ecr // e.g. dev, stage, prod
             }
           });
-          console.log(`Successfully triggered chart update for ${target_values_file_in_chart} using image tag base ${image_tag_to_use_in_chart}.`);
+          console.log(`Successfully triggered chart update for ${target_values_file_in_chart} using image version ${image_version}.`);
 
-    - name: Generate Release Notes
+    - name: Generate Release Notes from PR
       env:
-        NOTES_TAG_VERSION: ${{ env.TAG_VERSION_ENV }}
+        NOTES_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
       run: |
-        git log -n 20 --pretty=format:"* %h %s (%an, %ar)" > release-notes-${NOTES_TAG_VERSION}.md
-        cat release-notes-${NOTES_TAG_VERSION}.md
+        # Usar el cuerpo del PR o el título para notas de release simples
+        echo "Release Notes for Version: ${NOTES_IMAGE_VERSION}" > release-notes-${NOTES_IMAGE_VERSION}.md
+        echo "PR Title: ${{ github.event.pull_request.title }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+        echo "PR URL: ${{ github.event.pull_request.html_url }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+        echo "Merged by: ${{ github.event.pull_request.merged_by.login }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+        echo "---" >> release-notes-${NOTES_IMAGE_VERSION}.md
+        echo "${{ github.event.pull_request.body }}" >> release-notes-${NOTES_IMAGE_VERSION}.md
+        cat release-notes-${NOTES_IMAGE_VERSION}.md
 
     - name: Upload Release Notes
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: release-notes-${{ env.TAG_VERSION_ENV }}
-        path: release-notes-${{ env.TAG_VERSION_ENV }}.md
+        name: release-notes-${{ env.IMAGE_VERSION_ENV }}
+        path: release-notes-${{ env.IMAGE_VERSION_ENV }}.md
 
     - name: Deployment Summary
       env:
-        SUMMARY_ECR_REGISTRY_URI: ${{ env.ECR_REGISTRY_URI_ENV }}
-        SUMMARY_TAG_VERSION: ${{ env.TAG_VERSION_ENV }}
+        SUMMARY_ECR_BASE_URI: ${{ env.ECR_BASE_REGISTRY_URI_ENV }}
+        SUMMARY_IMAGE_VERSION: ${{ env.IMAGE_VERSION_ENV }}
         SUMMARY_TARGET_VALUES_FILE: ${{ env.TARGET_VALUES_FILE_ENV }}
-        SUMMARY_BRANCH_NAME: ${{ env.BRANCH_NAME_ENV }}
+        SUMMARY_EFFECTIVE_BRANCH: ${{ env.EFFECTIVE_BRANCH_NAME_ENV }}
+        SUMMARY_ENVIRONMENT_NAME: ${{ env.ENVIRONMENT_NAME_ENV }}
       run: |
-        echo "## Deployment Summary for Branch: ${SUMMARY_BRANCH_NAME}" >> $GITHUB_STEP_SUMMARY
+        echo "## Deployment Summary for PR Merge to: ${SUMMARY_EFFECTIVE_BRANCH}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Target Environment:** ${SUMMARY_ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
         echo "- **Target Values File Updated in Chart:** ${SUMMARY_TARGET_VALUES_FILE}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Image Version Tag Pushed:** ${SUMMARY_TAG_VERSION}" >> $GITHUB_STEP_SUMMARY
-        echo "- **ECR Registry URI:** ${SUMMARY_ECR_REGISTRY_URI}" >> $GITHUB_STEP_SUMMARY
-        echo "- **ECR Repository Name:** ${{ env.ECR_REPOSITORY_NAME }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Image Version Pushed to ECR:** ${SUMMARY_IMAGE_VERSION}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Base ECR Registry URI:** ${SUMMARY_ECR_BASE_URI}" >> $GITHUB_STEP_SUMMARY
+        echo "- **ECR Repositories (Pattern):** serviceName-${SUMMARY_ENVIRONMENT_NAME}" >> $GITHUB_STEP_SUMMARY
         echo "- **Chart Update Event Dispatched To:** microservices-project-k8s-jenkins/ecommerce-chart" >> $GITHUB_STEP_SUMMARY
