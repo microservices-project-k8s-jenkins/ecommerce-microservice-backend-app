@@ -50,11 +50,42 @@ jobs:
     - name: Extract Version and Determine Environment
       id: set-env-details
       run: |
-        PR_TITLE="${{ github.event.pull_request.title }}"
-        echo "Pull Request Title: $PR_TITLE"
+        EVENT_TYPE="${{ github.event_name }}"
+        echo "Workflow triggered by event: $EVENT_TYPE"
+
+        # --- INICIO DEBUG INPUTS ---
+        if [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
+          echo "Dumping all workflow_dispatch inputs (raw):"
+          echo "simulated_pr_title (raw input): '${{ github.event.inputs.simulated_pr_title }}'"
+          echo "simulated_target_branch (raw input): '${{ github.event.inputs.simulated_target_branch }}'"
+          echo "Full inputs context (JSON): ${{ toJson(github.event.inputs) }}"
+        fi
+        # --- FIN DEBUG INPUTS ---
+
+        PR_TITLE=""
+        EFFECTIVE_BRANCH_NAME=""
+
+        if [[ "$EVENT_TYPE" == "workflow_dispatch" ]]; then
+          PR_TITLE="${{ github.event.inputs.simulated_pr_title }}"
+          EFFECTIVE_BRANCH_NAME="${{ github.event.inputs.simulated_target_branch }}"
+          echo "Manual dispatch detected."
+          echo "Using Simulated PR Title (after assignment): '$PR_TITLE'"
+          echo "Using Simulated Target Branch (after assignment): '$EFFECTIVE_BRANCH_NAME'"
+        elif [[ "$EVENT_TYPE" == "pull_request" && "${{ github.event.pull_request.merged }}" == "true" ]]; then
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          EFFECTIVE_BRANCH_NAME="${{ github.base_ref }}" # Rama base del PR
+          echo "Pull Request Merge detected."
+          echo "Using Actual PR Title: '$PR_TITLE'"
+          echo "Using Actual PR Base Branch: '$EFFECTIVE_BRANCH_NAME'"
+        else
+          echo "::error::Workflow job started with an unexpected event combination that should have been filtered by the job's 'if' condition. Event: $EVENT_TYPE. PR Merged: ${{ github.event.pull_request.merged }}"
+          exit 1
+        fi
         
-        # Extraer version semántica (e.g., v1.2.3 o 1.2.3) del título del PR
-        # Esta regex busca "v" opcional, seguido de X.Y.Z
+        # Este echo es el que te dio vacío en el log
+        echo "Pull Request Title (before version extraction): '$PR_TITLE'" 
+
+        # Extraer version semántica (e.g., v1.2.3 o 1.2.3) del título del PR (real o simulado)
         IMAGE_VERSION_FROM_PR=$(echo "$PR_TITLE" | sed -n 's/.*\b\(v\?[0-9]\+\.[0-9]\+\.[0-9]\+\)\b.*/\1/p')
         
         if [ -z "$IMAGE_VERSION_FROM_PR" ]; then
@@ -62,17 +93,13 @@ jobs:
           exit 1
         fi
         echo "Extracted Image Version: $IMAGE_VERSION_FROM_PR"
-
-        # La rama efectiva es la rama base a la que se fusionó el PR
-        EFFECTIVE_BRANCH_NAME="${{ github.base_ref }}"
-        echo "Effective branch (PR base_ref): $EFFECTIVE_BRANCH_NAME"
         
         TARGET_VALUES_FILE=""
         ENVIRONMENT_NAME="" # dev, stage, prod
 
-        if [[ "$EFFECTIVE_BRANCH_NAME" == "main" || "$EFFECTIVE_BRANCH_NAME" == "master" ]]; then
+        if [[ "$EFFECTIVE_BRANCH_NAME" == "master" || "$EFFECTIVE_BRANCH_NAME" == "main" ]]; then
           TARGET_VALUES_FILE="values-master.yaml"
-          ENVIRONMENT_NAME="prod" # Usar 'prod' para ECR repo name si la rama es master/main
+          ENVIRONMENT_NAME="prod"
         elif [[ "$EFFECTIVE_BRANCH_NAME" == "stage" ]]; then
           TARGET_VALUES_FILE="values-stage.yaml"
           ENVIRONMENT_NAME="stage"
@@ -80,20 +107,20 @@ jobs:
           TARGET_VALUES_FILE="values-dev.yaml"
           ENVIRONMENT_NAME="dev"
         else
-          echo "::error::PR merged to unhandled base branch '$EFFECTIVE_BRANCH_NAME'. Exiting."
+          echo "::error::Effective branch '$EFFECTIVE_BRANCH_NAME' is not configured for a target environment. Exiting."
           exit 1
         fi
         
         echo "TARGET_VALUES_FILE_ENV=$TARGET_VALUES_FILE" >> $GITHUB_ENV
         echo "IMAGE_VERSION_ENV=$IMAGE_VERSION_FROM_PR" >> $GITHUB_ENV
-        echo "EFFECTIVE_BRANCH_NAME_ENV=$EFFECTIVE_BRANCH_NAME" >> $GITHUB_ENV # Rama real para lógica
-        echo "ENVIRONMENT_NAME_ENV=$ENVIRONMENT_NAME" >> $GITHUB_ENV # Para nombre de repo ECR
+        echo "EFFECTIVE_BRANCH_NAME_ENV=$EFFECTIVE_BRANCH_NAME" >> $GITHUB_ENV
+        echo "ENVIRONMENT_NAME_ENV=$ENVIRONMENT_NAME" >> $GITHUB_ENV
 
         echo "Target values file: $TARGET_VALUES_FILE"
         echo "Image Version for ECR Tag: $IMAGE_VERSION_FROM_PR"
         echo "Environment for ECR Repo: $ENVIRONMENT_NAME"
         echo "Effective Branch for chart values logic: $EFFECTIVE_BRANCH_NAME"
-
+        
     - name: Set up AWS credentials
       id: aws-creds
       uses: aws-actions/configure-aws-credentials@v4
