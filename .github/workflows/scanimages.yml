@@ -41,11 +41,10 @@ jobs:
         
       - name: Build and Scan Images in a Loop
         run: |
-          # Lista de servicios a procesar. La tomamos de tu pipeline de despliegue.
-          # NOTA: Si vas a eliminar cloud-config y service-discovery, quítalos de esta lista.
+          # Inicializamos una variable para rastrear el resultado final. 0 = éxito.
+          OVERALL_EXIT_CODE=0
+          
           services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
-
-          # Creamos un directorio para guardar los reportes de escaneo
           mkdir -p trivy-results
 
           for service_name in "${services[@]}"; do
@@ -61,34 +60,36 @@ jobs:
               continue
             fi
 
-            # Se crea un nombre de imagen temporal y local. NO se subirá a ningún registro.
-            # El tag incluye el número de PR para evitar colisiones y facilitar el debug.
-            # El '|| manual' es un fallback para cuando se ejecuta manualmente.
             IMAGE_NAME="local-scan/${service_name}:pr-${{ github.event.pull_request.number || 'manual' }}"
             
-            # Paso 1: Construir la imagen Docker
             echo "Building image: $IMAGE_NAME"
             docker build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
             
-            # Paso 2: Escanear la imagen con Trivy
             echo "Scanning image: $IMAGE_NAME"
             
-            # Trivy escaneará buscando vulnerabilidades ALTAS y CRÍTICAS.
-            # - `exit-code 1`: Si encuentra alguna de esas, el comando fallará, y por tanto, el workflow entero fallará.
-            # - `format sarif`: Genera un reporte en formato SARIF, que GitHub entiende.
-            # - `output`: Guarda el reporte en un archivo para subirlo más tarde.
-            # - `ignore-unfixed`: Es útil para no fallar por vulnerabilidades que aún no tienen parche. Puedes quitarlo si quieres ser más estricto.
-            trivy image \
+            # Ejecutamos Trivy, pero ahora controlamos su salida para que no detenga el script.
+            # El '!' niega el estado de salida. Si trivy falla (exit code 1), el 'if' se vuelve verdadero.
+            if ! trivy image \
               --exit-code 1 \
               --severity HIGH,CRITICAL \
               --format sarif \
               --output "trivy-results/${service_name}.sarif" \
               --ignore-unfixed \
-              "$IMAGE_NAME"
+              "$IMAGE_NAME"; then
               
-            echo "Scan for $service_name completed successfully."
-          done
+              # Si Trivy falló (encontró vulnerabilidades), lo anotamos y marcamos el resultado final como fallido.
+              echo "::error::Trivy found critical vulnerabilities in $service_name. The build will be marked as failed."
+              OVERALL_EXIT_CODE=1
+            else
+              # Si Trivy tuvo éxito, solo lo registramos.
+              echo "Scan for $service_name completed successfully. No critical issues found."
+            fi
+          done # El bucle for termina aquí, asegurando que todos los servicios sean escaneados.
 
+          # Después de que el bucle ha terminado, salimos con el código de estado general.
+          # Si alguna exploración falló, OVERALL_EXIT_CODE será 1 y este paso fallará.
+          # Si todas las exploraciones pasaron, será 0 y este paso tendrá éxito.
+          exit $OVERALL_EXIT_CODE
       - name: Upload Trivy scan results to GitHub Security tab
         # Este paso siempre se ejecuta, incluso si el paso anterior falló, para que puedas ver los resultados.
         if: always()
