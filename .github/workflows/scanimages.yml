@@ -32,10 +32,7 @@ jobs:
 
       - name: Install Trivy
         uses: aquasecurity/trivy-action@master
-        with:
-          install-type: 'binary'
-          version: 'latest'
-        
+
       - name: Build and Scan Images in a Loop
         run: |
           OVERALL_EXIT_CODE=0
@@ -87,4 +84,4 @@ jobs:
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: 'trivy-results'
+          sarif_file: trivy-results
