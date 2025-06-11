@@ -1,0 +1,91 @@
+name: CI - Build and Scan Docker Images on PR to dev
+
+on:
+  # Se dispara cuando se abre un PR o se empujan nuevos commits a él
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - dev
+  
+  # Permite el disparo manual desde la pestaña de Actions en GitHub
+  workflow_dispatch:
+
+permissions:
+  contents: read      # Permiso para hacer checkout del código
+  security-events: write # Permiso para subir los resultados de Trivy a la pestaña de Seguridad
+
+jobs:
+  build-and-scan:
+    name: Build & Scan Images with Trivy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven' # Habilita el cacheo para acelerar las builds
+
+      - name: Build application JARs with Maven
+        run: ./mvnw clean package -DskipTests
+        
+      - name: Build and Scan Images in a Loop
+        run: |
+          # Lista de servicios a procesar. La tomamos de tu pipeline de despliegue.
+          # NOTA: Si vas a eliminar cloud-config y service-discovery, quítalos de esta lista.
+          services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
+
+          # Creamos un directorio para guardar los reportes de escaneo
+          mkdir -p trivy-results
+
+          for service_name in "${services[@]}"; do
+            CONTEXT_PATH="./${service_name}"
+            DOCKERFILE_PATH="${CONTEXT_PATH}/Dockerfile"
+            
+            echo "--------------------------------------------------"
+            echo "Processing service: $service_name"
+            echo "--------------------------------------------------"
+
+            if [ ! -f "$DOCKERFILE_PATH" ]; then
+              echo "::warning::Dockerfile not found for $service_name at $DOCKERFILE_PATH. Skipping."
+              continue
+            fi
+
+            # Se crea un nombre de imagen temporal y local. NO se subirá a ningún registro.
+            # El tag incluye el número de PR para evitar colisiones y facilitar el debug.
+            # El '|| manual' es un fallback para cuando se ejecuta manualmente.
+            IMAGE_NAME="local-scan/${service_name}:pr-${{ github.event.pull_request.number || 'manual' }}"
+            
+            # Paso 1: Construir la imagen Docker
+            echo "Building image: $IMAGE_NAME"
+            docker build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
+            
+            # Paso 2: Escanear la imagen con Trivy
+            echo "Scanning image: $IMAGE_NAME"
+            
+            # Trivy escaneará buscando vulnerabilidades ALTAS y CRÍTICAS.
+            # - `exit-code 1`: Si encuentra alguna de esas, el comando fallará, y por tanto, el workflow entero fallará.
+            # - `format sarif`: Genera un reporte en formato SARIF, que GitHub entiende.
+            # - `output`: Guarda el reporte en un archivo para subirlo más tarde.
+            # - `ignore-unfixed`: Es útil para no fallar por vulnerabilidades que aún no tienen parche. Puedes quitarlo si quieres ser más estricto.
+            trivy image \
+              --exit-code 1 \
+              --severity HIGH,CRITICAL \
+              --format sarif \
+              --output "trivy-results/${service_name}.sarif" \
+              --ignore-unfixed \
+              "$IMAGE_NAME"
+              
+            echo "Scan for $service_name completed successfully."
+          done
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        # Este paso siempre se ejecuta, incluso si el paso anterior falló, para que puedas ver los resultados.
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results'
