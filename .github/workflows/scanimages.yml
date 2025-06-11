@@ -11,6 +11,9 @@ permissions:
   contents: read
   security-events: write
 
+env:
+  TRIVY_VERSION: "0.63.0"
+
 jobs:
   build-and-scan:
     name: Build & Scan Images with Trivy
@@ -32,7 +35,8 @@ jobs:
 
       - name: Install Trivy
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${{ env.TRIVY_VERSION }}
+          VERSION=${TRIVY_VERSION:-"0.63.0"}
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${VERSION}
           trivy --version
 
       - name: Build and Scan Images in a Loop
