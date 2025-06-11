@@ -1,18 +1,15 @@
 name: CI - Build and Scan Docker Images on PR to dev
 
 on:
-  # Se dispara cuando se abre un PR o se empujan nuevos commits a él
   pull_request:
     types: [opened, synchronize]
     branches:
       - dev
-  
-  # Permite el disparo manual desde la pestaña de Actions en GitHub
   workflow_dispatch:
 
 permissions:
-  contents: read      # Permiso para hacer checkout del código
-  security-events: write # Permiso para subir los resultados de Trivy a la pestaña de Seguridad
+  contents: read
+  security-events: write
 
 jobs:
   build-and-scan:
@@ -28,7 +25,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-          cache: 'maven' # Habilita el cacheo para acelerar las builds
+          cache: 'maven'
 
       - name: Build application JARs with Maven
         run: ./mvnw clean package -DskipTests
@@ -37,11 +34,10 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           install-type: 'binary'
-          version: 'latest' # O una versión específica como '0.50.1' para builds reproducibles
+          version: 'latest'
         
       - name: Build and Scan Images in a Loop
         run: |
-          # Inicializamos una variable para rastrear el resultado final. 0 = éxito.
           OVERALL_EXIT_CODE=0
           
           services=( cloud-config service-discovery api-gateway proxy-client order-service payment-service product-service shipping-service user-service favourite-service )
@@ -60,38 +56,34 @@ jobs:
               continue
             fi
 
-            IMAGE_NAME="local-scan/${service_name}:pr-${{ github.event.pull_request.number || 'manual' }}"
-            
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            TAG="pr-${PR_NUMBER:-manual}"
+            IMAGE_NAME="local-scan/${service_name}:${TAG}"
+          
             echo "Building image: $IMAGE_NAME"
             docker build -t "$IMAGE_NAME" -f "$DOCKERFILE_PATH" "$CONTEXT_PATH"
             
             echo "Scanning image: $IMAGE_NAME"
             
-            # Ejecutamos Trivy, pero ahora controlamos su salida para que no detenga el script.
-            # El '!' niega el estado de salida. Si trivy falla (exit code 1), el 'if' se vuelve verdadero.
             if ! trivy image \
               --exit-code 1 \
+              --scanners vuln \
               --severity HIGH,CRITICAL \
               --format sarif \
               --output "trivy-results/${service_name}.sarif" \
               --ignore-unfixed \
               "$IMAGE_NAME"; then
               
-              # Si Trivy falló (encontró vulnerabilidades), lo anotamos y marcamos el resultado final como fallido.
               echo "::error::Trivy found critical vulnerabilities in $service_name. The build will be marked as failed."
               OVERALL_EXIT_CODE=1
             else
-              # Si Trivy tuvo éxito, solo lo registramos.
               echo "Scan for $service_name completed successfully. No critical issues found."
             fi
-          done # El bucle for termina aquí, asegurando que todos los servicios sean escaneados.
+          done
 
-          # Después de que el bucle ha terminado, salimos con el código de estado general.
-          # Si alguna exploración falló, OVERALL_EXIT_CODE será 1 y este paso fallará.
-          # Si todas las exploraciones pasaron, será 0 y este paso tendrá éxito.
           exit $OVERALL_EXIT_CODE
+
       - name: Upload Trivy scan results to GitHub Security tab
-        # Este paso siempre se ejecuta, incluso si el paso anterior falló, para que puedas ver los resultados.
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
