@@ -32,6 +32,12 @@ jobs:
 
       - name: Build application JARs with Maven
         run: ./mvnw clean package -DskipTests
+
+      - name: Install Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          install-type: 'binary'
+          version: 'latest' # O una versión específica como '0.50.1' para builds reproducibles
         
       - name: Build and Scan Images in a Loop
         run: |
