@@ -31,7 +31,9 @@ jobs:
         run: ./mvnw clean package -DskipTests
 
       - name: Install Trivy
-        uses: aquasecurity/trivy-action@master
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v${{ env.TRIVY_VERSION }}
+          trivy --version
 
       - name: Build and Scan Images in a Loop
         run: |
