@@ -1,0 +1,62 @@
+name: Backend PR Checks and Manual Validation
+
+on:
+  # Trigger para Pull Requests (sin cambios aquí)
+  pull_request:
+    branches:
+      - master
+      - dev
+      - stage
+
+  # Trigger para ejecución manual
+  workflow_dispatch:
+    inputs:
+      branch_to_validate:
+        description: 'Branch to validate (e.g., master, stage, develop, feature/my-feature)'
+        required: true
+        default: 'master' # Rama por defecto para ejecución manual
+        type: string
+
+jobs:
+  build-and-test:
+    name: Build and Test Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.branch_to_validate || '' }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Determine Branch for Display
+        id: branch_info
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "BRANCH_NAME=${{ inputs.branch_to_validate }}" >> $GITHUB_OUTPUT
+          else # pull_request
+            echo "BRANCH_NAME=${{ github.head_ref || github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: Display Branch Being Tested
+        run: |
+          echo "Validating branch: ${{ steps.branch_info.outputs.BRANCH_NAME }}"
+
+      - name: Run Maven Tests
+        run: ./mvnw clean test
+
+      - name: Upload Test Reports (Optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-reports-${{ steps.branch_info.outputs.BRANCH_NAME }}
+          path: |
+            **/surefire-reports/*.xml
+            **/failsafe-reports/*.xml
+          retention-days: 7
